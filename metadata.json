@@ -1,0 +1,6 @@
+{
+  "name": "ALMX - Almoxarifado Inteligente",
+  "description": "Sistema completo de Almoxarifado Inteligente e Gestão de Estoque com leitura inteligente de NF-e, controle de lotes, inventário e IA preditiva.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

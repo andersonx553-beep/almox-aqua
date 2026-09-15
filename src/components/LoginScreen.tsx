@@ -1,30 +1,67 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlmxLogo } from './AlmxLogo';
 
+type DevelopmentUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  defaultUnitId?: string | null;
+};
+
 interface LoginScreenProps {
-  onLoginSuccess: (unit: string) => void;
+  onLoginSuccess: (user: DevelopmentUser) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
-  const [email, setEmail] = useState('mariana.souza@aquaville.com.br');
-  const [password, setPassword] = useState('••••••••');
+  const apiBaseUrl = (import.meta as ImportMeta & { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || 'http://localhost:3001';
+  const [users, setUsers] = useState<DevelopmentUser[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [isRegistering, setIsRegistering] = useState(false);
   const [unit, setUnit] = useState('AquaVille Resort - Unidade Principal');
-  const [remember, setRemember] = useState(true);
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    fetch(`${apiBaseUrl}/api/auth/users`)
+      .then((response) => response.json())
+      .then((data: DevelopmentUser[]) => {
+        setUsers(data);
+        if (data.length) setSelectedUserId(data[0].id);
+        else setIsRegistering(true);
+      })
+      .catch(() => setIsRegistering(true));
+  }, [apiBaseUrl]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-
-    setTimeout(() => {
+    try {
+      const endpoint = isRegistering ? '/api/auth/users' : '/api/auth/select';
+      const response = await fetch(`${apiBaseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isRegistering ? { name, email } : { userId: selectedUserId }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.error || 'Não foi possível identificar o usuário.');
+      }
+      const data = await response.json();
+      localStorage.setItem('almx.userId', data.user.id);
+      localStorage.setItem('almx.userName', data.user.name);
+      localStorage.setItem('almx.unitId', data.user.defaultUnitId || '');
       setLoading(false);
       setAuthenticated(true);
       setTimeout(() => {
-        onLoginSuccess(unit);
+        onLoginSuccess(data.user);
       }, 700);
-    }, 900);
+    } catch (error) {
+      setLoading(false);
+      window.alert(error instanceof Error ? error.message : 'Não foi possível entrar.');
+    }
   };
 
   return (
@@ -75,73 +112,63 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
           {/* Authentication Form */}
           <form onSubmit={handleSubmit} className="flex flex-col space-y-4">
-            {/* Corporate Email Field */}
+            {/* Registered User Selector */}
             <div className="flex flex-col">
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-semibold text-[#3e494a]" htmlFor="corporate-email">
-                  E-mail Corporativo
+                <label className="text-xs font-semibold text-[#3e494a]" htmlFor="development-user">
+                  {isRegistering ? 'Cadastrar primeiro usuário' : 'Usuário em uso'}
                 </label>
                 <span className="text-[11px] font-semibold text-[#2b6676] bg-[#b0e8fc]/30 px-2 py-0.5 rounded-full">
-                  SSO Integrado
+                  Identificação local
                 </span>
               </div>
               <div className="relative flex items-center">
                 <span className="material-symbols-outlined absolute left-3.5 text-[#6e797b] pointer-events-none text-[20px]">
-                  mail
+                  person
                 </span>
-                <input
-                  id="corporate-email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="seu.nome@empresa.com"
-                  className="w-full bg-[#edf4ff] text-[#001d32] text-sm pl-11 pr-4 py-2.5 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-[#00616a]/30 transition-all placeholder:text-[#6e797b]/60"
-                />
+                {isRegistering ? (
+                  <input
+                    id="development-user"
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Nome do usuário"
+                    className="w-full bg-[#edf4ff] text-[#001d32] text-sm pl-11 pr-4 py-2.5 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-[#00616a]/30 transition-all"
+                  />
+                ) : (
+                  <select
+                    id="development-user"
+                    required
+                    value={selectedUserId}
+                    onChange={(e) => setSelectedUserId(e.target.value)}
+                    className="w-full bg-[#edf4ff] text-[#001d32] text-sm pl-11 pr-10 py-2.5 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-[#00616a]/30 transition-all appearance-none cursor-pointer"
+                  >
+                    {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                  </select>
+                )}
+                <span className="material-symbols-outlined absolute right-3.5 text-[#6e797b] pointer-events-none text-[20px]">
+                  {isRegistering ? 'edit' : 'expand_more'}
+                </span>
               </div>
             </div>
 
-            {/* Password Field with Visibility Toggle */}
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-semibold text-[#3e494a]" htmlFor="corporate-password">
-                  Senha de Acesso
-                </label>
-                <button
-                  type="button"
-                  onClick={() => alert('Link de recuperação enviado para o e-mail corporativo cadastrado.')}
-                  className="text-[11px] font-medium text-[#00616a] hover:underline transition-all"
-                >
-                  Esqueci minha senha
-                </button>
-              </div>
-              <div className="relative flex items-center">
-                <span className="material-symbols-outlined absolute left-3.5 text-[#6e797b] pointer-events-none text-[20px]">
-                  lock
-                </span>
-                <input
-                  id="corporate-password"
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full bg-[#edf4ff] text-[#001d32] text-sm pl-11 pr-11 py-2.5 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-[#00616a]/30 transition-all placeholder:text-[#6e797b]/60"
-                />
-                <button
-                  type="button"
-                  aria-label="Alternar visibilidade da senha"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 text-[#6e797b] hover:text-[#001d32] p-1 rounded-md transition-colors"
-                >
-                  <span className="material-symbols-outlined text-[20px]">
-                    {showPassword ? 'visibility_off' : 'visibility'}
-                  </span>
-                </button>
-              </div>
-            </div>
+            {isRegistering && (
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="E-mail (opcional)"
+                className="w-full bg-[#edf4ff] text-[#001d32] text-sm px-3 py-2.5 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-[#00616a]/30 transition-all"
+              />
+            )}
 
-            {/* Facility / Unit Dropdown */}
+            {users.length > 0 && (
+              <button type="button" onClick={() => setIsRegistering(!isRegistering)} className="text-left text-xs text-[#00616a] font-semibold hover:underline">
+                {isRegistering ? 'Selecionar usuário já cadastrado' : 'Cadastrar novo usuário'}
+              </button>
+            )}
+
+            {/* Facility / Unit Context */}
             <div className="flex flex-col">
               <label
                 className="text-xs font-semibold text-[#3e494a] mb-1 flex items-center gap-1"
@@ -178,18 +205,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </div>
             </div>
 
-            {/* Remember Station Checkbox */}
-            <label className="flex items-center gap-2 cursor-pointer select-none pt-1">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                className="w-4 h-4 rounded text-[#087c87] accent-[#087c87] cursor-pointer"
-              />
-              <span className="text-xs text-[#3e494a]">
-                Lembrar credencial neste terminal operacional
-              </span>
-            </label>
+            <p className="text-xs text-[#3e494a] pt-1">
+              A seleção identifica quem está operando o ALMX e será registrada no histórico.
+            </p>
 
             {/* Submit Button */}
             <button

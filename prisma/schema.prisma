@@ -1,3 +1,16 @@
+// All timestamps are written and interpreted as UTC by the backend.
+// StockBalance is a materialized projection: stock changes must happen in a
+// transaction that creates StockMovement records; never update it directly.
+// A reconciliation job should periodically compare each StockBalance against
+// the sum of the official StockMovementItem history.
+// Product.unit is the canonical unit. InvoiceItem.unit and
+// StockMovementItem.unit are historical document/operation snapshots.
+// Prisma schema fields below define precision and nullability. PostgreSQL
+// CHECK constraints for non-negative values and confidence ranges must be
+// included in the first migration because Prisma schema cannot express them.
+// Normal queries must filter deletedAt IS NULL; historical identifiers remain
+// reserved after soft delete to preserve traceability and avoid reuse.
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -5,4 +18,650 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  OPERATOR
+  AUDITOR
+  VIEWER
+}
+
+enum InvoiceOrigin {
+  MANUAL
+  XML
+  PDF
+  IMAGE
+  OCR
+  API
+}
+
+enum InvoiceProcessingStatus {
+  UPLOADED
+  OCR_PROCESSING
+  OCR_READY
+  UNDER_REVIEW
+  CONFIRMED
+  REJECTED
+  ERROR
+}
+
+enum InvoiceItemMatchStatus {
+  PENDING
+  MATCHED
+  DIVERGENCE
+  NEW_PRODUCT
+  REJECTED
+}
+
+enum OcrRunStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  REVIEWED
+}
+
+enum MovementType {
+  ENTRY
+  EXIT
+  ADJUSTMENT
+  INVENTORY
+  TRANSFER
+}
+
+enum TransferStatus {
+  DRAFT
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+enum TransferLeg {
+  OUTBOUND
+  INBOUND
+}
+
+enum InventoryStatus {
+  DRAFT
+  IN_PROGRESS
+  UNDER_REVIEW
+  CONFIRMED
+  CANCELLED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  CONFIRM
+  REJECT
+  LOGIN
+  LOGOUT
+  STOCK_MOVEMENT
+}
+
+enum AuditResult {
+  SUCCESS
+  FAILURE
+}
+
+model OperationalUnit {
+  id           String          @id @default(cuid())
+  code         String          @unique
+  name         String
+  isActive     Boolean         @default(true)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  defaultUsers User[]          @relation("UserDefaultUnit")
+  memberships  UserUnit[]
+  warehouses   Warehouse[]
+  invoices     Invoice[]
+  movements    StockMovement[]
+  inventories  Inventory[]
+  auditLogs    AuditLog[]      @relation("AuditUnit")
+  transfers    Transfer[]
+
+  @@index([isActive, name])
+}
+
+model User {
+  // User.role is the global role. UserUnit.role is the role inside one unit;
+  // backend authorization must always resolve the role for the active unit.
+  id                   String           @id @default(cuid())
+  email                String           @unique
+  passwordHash         String?
+  ssoSubject           String?          @unique
+  name                 String
+  employeeCode         String?          @unique
+  role                 UserRole         @default(OPERATOR)
+  status               UserStatus       @default(ACTIVE)
+  lastLoginAt          DateTime?
+  defaultUnitId        String?
+  defaultUnit          OperationalUnit? @relation("UserDefaultUnit", fields: [defaultUnitId], references: [id], onDelete: SetNull)
+  memberships          UserUnit[]
+  createdInvoices      Invoice[]        @relation("InvoiceCreatedBy")
+  reviewedInvoices     Invoice[]        @relation("InvoiceReviewedBy")
+  confirmedInvoices    Invoice[]        @relation("InvoiceConfirmedBy")
+  requestedOcrRuns     OcrRun[]         @relation("OcrRequestedBy")
+  reviewedOcrRuns      OcrRun[]         @relation("OcrReviewedBy")
+  movements            StockMovement[]
+  inventories          Inventory[]
+  confirmedInventories Inventory[]      @relation("InventoryConfirmedBy")
+  requestedTransfers   Transfer[]       @relation("TransferRequestedBy")
+  approvedTransfers    Transfer[]       @relation("TransferApprovedBy")
+  auditLogs            AuditLog[]
+  sessions             Session[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  @@index([status, role])
+  @@index([name])
+}
+
+model UserUnit {
+  id        String          @id @default(cuid())
+  userId    String
+  unitId    String
+  role      UserRole        @default(OPERATOR)
+  createdAt DateTime        @default(now())
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unit      OperationalUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, unitId])
+  @@index([unitId, role])
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  code        String     @unique
+  name        String
+  description String?
+  isActive    Boolean    @default(true)
+  parentId    String?
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[] @relation("CategoryHierarchy")
+  products    Product[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([parentId, name])
+  @@index([isActive, name])
+}
+
+model Product {
+  id             String              @id @default(cuid())
+  sku            String              @unique
+  barcode        String?             @unique
+  name           String
+  description    String?
+  unit           String
+  // Non-negative; backend/database CHECK must enforce minStock >= 0.
+  minStock       Decimal             @default(0) @db.Decimal(14, 3)
+  // Non-negative when present and must be >= minStock.
+  maxStock       Decimal?            @db.Decimal(14, 3)
+  // Non-negative when present and normally >= minStock.
+  reorderPoint   Decimal?            @db.Decimal(14, 3)
+  isActive       Boolean             @default(true)
+  imageUrl       String?
+  technicalSpecs String?
+  categoryId     String
+  category       Category            @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  supplierLinks  ProductSupplier[]
+  lots           ProductLot[]
+  stockBalances  StockBalance[]
+  invoiceItems   InvoiceItem[]
+  movementItems  StockMovementItem[]
+  inventoryItems InventoryItem[]
+  transferItems  TransferItem[]
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([name])
+  @@index([categoryId, isActive])
+  @@index([isActive, minStock])
+}
+
+model Supplier {
+  id            String            @id @default(cuid())
+  legalName     String
+  tradeName     String?
+  taxId         String?           @unique
+  email         String?
+  phone         String?
+  contactName   String?
+  addressLine   String?
+  addressNumber String?
+  addressExtra  String?
+  neighborhood  String?
+  city          String?
+  state         String?
+  postalCode    String?
+  isActive      Boolean           @default(true)
+  products      ProductSupplier[]
+  invoices      Invoice[]
+  lots          ProductLot[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([legalName])
+  @@index([isActive, legalName])
+}
+
+model ProductSupplier {
+  productId   String
+  supplierId  String
+  isPreferred Boolean  @default(false)
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplier    Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@id([productId, supplierId])
+  @@index([supplierId])
+}
+
+model Warehouse {
+  id                 String              @id @default(cuid())
+  unitId             String
+  code               String
+  name               String
+  address            String?
+  isActive           Boolean             @default(true)
+  unit               OperationalUnit     @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  stockBalances      StockBalance[]
+  sourceMovements    StockMovement[]     @relation("MovementSourceWarehouse")
+  targetMovements    StockMovement[]     @relation("MovementTargetWarehouse")
+  inventories        Inventory[]
+  locations          WarehouseLocation[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  stockMovementItems StockMovementItem[]
+  sourceTransfers    Transfer[]          @relation("TransferSourceWarehouse")
+  targetTransfers    Transfer[]          @relation("TransferTargetWarehouse")
+
+  @@unique([unitId, code])
+  @@unique([id, unitId])
+  @@index([unitId, isActive])
+}
+
+model WarehouseLocation {
+  id                 String              @id @default(cuid())
+  warehouseId        String
+  code               String
+  name               String
+  isActive           Boolean             @default(true)
+  warehouse          Warehouse           @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  stockMovementItems StockMovementItem[]
+  inventoryItems     InventoryItem[]
+  stockBalances      StockBalance[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@unique([warehouseId, code])
+  @@unique([id, warehouseId])
+  @@index([warehouseId, isActive])
+}
+
+model ProductLot {
+  id              String              @id @default(cuid())
+  productId       String
+  supplierId      String?
+  lotNumber       String
+  expirationDate  DateTime?
+  manufactureDate DateTime?
+  product         Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  supplier        Supplier?           @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  invoiceItems    InvoiceItem[]
+  stockBalances   StockBalance[]
+  movementItems   StockMovementItem[]
+  inventoryItems  InventoryItem[]
+  transferItems   TransferItem[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([productId, lotNumber])
+  @@unique([id, productId])
+  @@index([lotNumber])
+  @@index([expirationDate])
+}
+
+model StockBalance {
+  id             String            @id @default(cuid())
+  unitId         String
+  productId      String
+  warehouseId    String
+  lotId          String
+  locationId     String
+  // Non-negative materialized balance; updated only by the stock service.
+  quantityOnHand Decimal           @default(0) @db.Decimal(14, 3)
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  warehouse      Warehouse         @relation(fields: [warehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  lot            ProductLot        @relation(fields: [lotId, productId], references: [id, productId], onDelete: Restrict)
+  location       WarehouseLocation @relation(fields: [locationId, warehouseId], references: [id, warehouseId], onDelete: Restrict)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@unique([unitId, productId, warehouseId, lotId, locationId])
+  @@index([productId, warehouseId])
+  @@index([warehouseId, quantityOnHand])
+  @@index([lotId, productId])
+  @@index([locationId, warehouseId])
+}
+
+model Invoice {
+  id               String                  @id @default(cuid())
+  unitId           String
+  supplierId       String?
+  number           String
+  // Empty/unknown series is normalized to "0" so PostgreSQL uniqueness is deterministic.
+  series           String                  @default("0")
+  accessKey        String?                 @unique
+  issueDate        DateTime?
+  receivedAt       DateTime?
+  totalValue       Decimal?                @db.Decimal(14, 2)
+  origin           InvoiceOrigin
+  processingStatus InvoiceProcessingStatus @default(UPLOADED)
+  createdById      String?
+  reviewedById     String?
+  confirmedById    String?
+  reviewedAt       DateTime?
+  confirmedAt      DateTime?
+  rejectionReason  String?
+  deletedAt        DateTime?
+  unit             OperationalUnit         @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  supplier         Supplier?               @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  createdBy        User?                   @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  reviewedBy       User?                   @relation("InvoiceReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  confirmedBy      User?                   @relation("InvoiceConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  items            InvoiceItem[]
+  documents        InvoiceDocument[]
+  ocrRuns          OcrRun[]
+  movements        StockMovement[]
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@unique([unitId, number, series])
+  @@index([processingStatus, createdAt])
+  @@index([supplierId, issueDate])
+  @@index([unitId, receivedAt])
+}
+
+model InvoiceItem {
+  id           String                 @id @default(cuid())
+  invoiceId    String
+  productId    String?
+  lotId        String?
+  description  String
+  supplierSku  String?
+  suggestedSku String?
+  unit         String
+  // quantity, unitPrice and totalPrice are non-negative document values.
+  quantity     Decimal                @db.Decimal(14, 3)
+  unitPrice    Decimal                @db.Decimal(14, 2)
+  totalPrice   Decimal                @db.Decimal(14, 2)
+  matchStatus  InvoiceItemMatchStatus @default(PENDING)
+  confidence   Decimal?               @db.Decimal(5, 4)
+  reviewNote   String?
+  deletedAt    DateTime?
+  invoice      Invoice                @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  product      Product?               @relation(fields: [productId], references: [id], onDelete: SetNull)
+  lot          ProductLot?            @relation(fields: [productId, lotId], references: [productId, id], onDelete: Restrict)
+
+  @@index([invoiceId, matchStatus])
+  @@index([productId])
+  @@index([supplierSku])
+}
+
+model InvoiceDocument {
+  id         String    @id @default(cuid())
+  invoiceId  String
+  fileName   String
+  mediaType  String
+  storageKey String
+  checksum   String?
+  deletedAt  DateTime?
+  invoice    Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  createdAt  DateTime  @default(now())
+
+  @@index([invoiceId, deletedAt])
+  @@index([checksum])
+}
+
+model OcrRun {
+  id            String       @id @default(cuid())
+  invoiceId     String
+  requestedById String?
+  reviewedById  String?
+  status        OcrRunStatus @default(QUEUED)
+  provider      String?
+  model         String?
+  // Optional confidence in the inclusive range 0..1.
+  confidence    Decimal?     @db.Decimal(5, 4)
+  rawOutput     Json?
+  errorMessage  String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  reviewedAt    DateTime?
+  deletedAt     DateTime?
+  invoice       Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  requestedBy   User?        @relation("OcrRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  reviewedBy    User?        @relation("OcrReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+
+  @@index([invoiceId, status])
+  @@index([status, createdAt])
+}
+
+model Transfer {
+  id                String          @id @default(cuid())
+  unitId            String
+  sourceWarehouseId String
+  targetWarehouseId String
+  referenceCode     String          @unique
+  idempotencyKey    String?         @unique
+  status            TransferStatus  @default(DRAFT)
+  requestedById     String
+  approvedById      String?
+  requestedAt       DateTime        @default(now())
+  approvedAt        DateTime?
+  dispatchedAt      DateTime?
+  completedAt       DateTime?
+  cancelledAt       DateTime?
+  deletedAt         DateTime?
+  unit              OperationalUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  sourceWarehouse   Warehouse       @relation("TransferSourceWarehouse", fields: [sourceWarehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  targetWarehouse   Warehouse       @relation("TransferTargetWarehouse", fields: [targetWarehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  requestedBy       User            @relation("TransferRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy        User?           @relation("TransferApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  items             TransferItem[]
+  movements         StockMovement[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([unitId, status, requestedAt])
+  @@index([status, requestedAt])
+  @@index([sourceWarehouseId, status])
+  @@index([targetWarehouseId, status])
+}
+
+model TransferItem {
+  id               String     @id @default(cuid())
+  transferId       String
+  productId        String
+  lotId            String
+  // quantitySent is non-negative. quantityReceived stays NULL while the
+  // transfer is DRAFT or IN_TRANSIT; it becomes non-negative on completion.
+  quantitySent     Decimal    @db.Decimal(14, 3)
+  quantityReceived Decimal?   @db.Decimal(14, 3)
+  unit             String
+  transfer         Transfer   @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  product          Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  lot              ProductLot @relation(fields: [productId, lotId], references: [productId, id], onDelete: Restrict)
+  createdAt        DateTime   @default(now())
+
+  @@index([transferId])
+  @@index([productId, lotId])
+}
+
+model StockMovement {
+  id                String              @id @default(cuid())
+  unitId            String
+  type              MovementType
+  referenceCode     String              @unique
+  sourceWarehouseId String?
+  targetWarehouseId String?
+  invoiceId         String?
+  inventoryId       String?
+  transferId        String?
+  transferLeg       TransferLeg?
+  idempotencyKey    String?             @unique
+  performedById     String
+  reason            String?
+  department        String?
+  costCenter        String?
+  occurredAt        DateTime            @default(now())
+  deletedAt         DateTime?
+  sourceWarehouse   Warehouse?          @relation("MovementSourceWarehouse", fields: [sourceWarehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  targetWarehouse   Warehouse?          @relation("MovementTargetWarehouse", fields: [targetWarehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  unit              OperationalUnit     @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  invoice           Invoice?            @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  inventory         Inventory?          @relation(fields: [inventoryId], references: [id], onDelete: SetNull)
+  transfer          Transfer?           @relation(fields: [transferId], references: [id], onDelete: Restrict)
+  performedBy       User                @relation(fields: [performedById], references: [id], onDelete: Restrict)
+  items             StockMovementItem[]
+  createdAt         DateTime            @default(now())
+
+  @@unique([id, unitId])
+  @@index([unitId, occurredAt])
+  @@index([type, occurredAt])
+  @@index([performedById, occurredAt])
+  @@index([invoiceId])
+  @@index([inventoryId])
+  @@index([transferId, transferLeg])
+}
+
+model StockMovementItem {
+  id            String            @id @default(cuid())
+  movementId    String
+  unitId        String
+  productId     String
+  lotId         String
+  warehouseId   String
+  locationId    String
+  // Signed by design: ENTRY/INBOUND are positive, EXIT/OUTBOUND negative.
+  // The absolute quantity is non-negative and must be validated by the
+  // transactional service together with MovementType and TransferLeg.
+  quantityDelta Decimal           @db.Decimal(14, 3)
+  unit          String
+  unitCost      Decimal?          @db.Decimal(14, 2)
+  balanceAfter  Decimal?          @db.Decimal(14, 3)
+  note          String?
+  deletedAt     DateTime?
+  movement      StockMovement     @relation(fields: [movementId, unitId], references: [id, unitId], onDelete: Restrict)
+  product       Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  lot           ProductLot        @relation(fields: [productId, lotId], references: [productId, id], onDelete: Restrict)
+  warehouse     Warehouse         @relation(fields: [warehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  location      WarehouseLocation @relation(fields: [locationId, warehouseId], references: [id, warehouseId], onDelete: Restrict)
+
+  @@index([productId, warehouseId, lotId, locationId])
+  @@index([productId, movementId])
+  @@index([movementId])
+}
+
+model Inventory {
+  id            String          @id @default(cuid())
+  unitId        String
+  warehouseId   String
+  name          String
+  status        InventoryStatus @default(DRAFT)
+  responsibleId String
+  confirmedById String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  confirmedAt   DateTime?
+  deletedAt     DateTime?
+  unit          OperationalUnit @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  warehouse     Warehouse       @relation(fields: [warehouseId, unitId], references: [id, unitId], onDelete: Restrict)
+  responsible   User            @relation(fields: [responsibleId], references: [id], onDelete: Restrict)
+  confirmedBy   User?           @relation("InventoryConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  items         InventoryItem[]
+  movements     StockMovement[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([id, warehouseId])
+  @@index([warehouseId, status])
+  @@index([responsibleId, status])
+}
+
+model InventoryItem {
+  id                 String            @id @default(cuid())
+  inventoryId        String
+  warehouseId        String
+  productId          String
+  lotId              String
+  locationId         String
+  locationSnapshot   String?
+  // expectedQuantity is a non-negative snapshot of StockBalance.
+  expectedQuantity   Decimal           @db.Decimal(14, 3)
+  // countedQuantity is nullable until the physical count is performed.
+  countedQuantity    Decimal?          @db.Decimal(14, 3)
+  // Snapshot: differenceQuantity = countedQuantity - expectedQuantity.
+  // The backend must keep these values consistent in one transaction.
+  differenceQuantity Decimal?          @db.Decimal(14, 3)
+  observation        String?
+  inventory          Inventory         @relation(fields: [inventoryId, warehouseId], references: [id, warehouseId], onDelete: Restrict)
+  product            Product           @relation(fields: [productId], references: [id], onDelete: Restrict)
+  lot                ProductLot        @relation(fields: [productId, lotId], references: [productId, id], onDelete: Restrict)
+  location           WarehouseLocation @relation(fields: [locationId, warehouseId], references: [id, warehouseId], onDelete: Restrict)
+  countedAt          DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  @@index([inventoryId, productId])
+  @@index([productId, lotId])
+}
+
+model AuditLog {
+  id         String           @id @default(cuid())
+  userId     String?
+  unitId     String?
+  action     AuditAction
+  result     AuditResult      @default(SUCCESS)
+  entityType String
+  entityId   String
+  requestId  String?
+  ipAddress  String?
+  userAgent  String?
+  beforeData Json?
+  afterData  Json?
+  metadata   Json?
+  occurredAt DateTime         @default(now())
+  user       User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  unit       OperationalUnit? @relation("AuditUnit", fields: [unitId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([unitId, occurredAt])
+  @@index([requestId])
+  @@index([action, occurredAt])
+}
+
+model Session {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, revokedAt, expiresAt])
 }

@@ -18,7 +18,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { Toast } from './components/Toast';
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUnit, setCurrentUnit] = useState('AquaVille Resort - Unidade Principal');
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('dashboard');
   const [estoqueFilter, setEstoqueFilter] = useState('all');
@@ -154,10 +154,10 @@ export default function App() {
   if (!isAuthenticated) {
     return (
       <LoginScreen
-        onLoginSuccess={(unit) => {
-          setCurrentUnit(unit);
+        onLoginSuccess={(user) => {
+          setCurrentUnit('AquaVille Resort - Unidade Principal');
           setIsAuthenticated(true);
-          showToast('Bem-vinda, Mariana! Sessão ativa no Depósito Central.', 'verified');
+          showToast(`Operador ${user.name} identificado no ALMX.`, 'verified');
         }}
       />
     );
@@ -189,6 +189,9 @@ export default function App() {
         onNavigate={handleNavigate}
         onLogout={() => {
           setIsAuthenticated(false);
+          localStorage.removeItem('almx.userId');
+          localStorage.removeItem('almx.userName');
+          localStorage.removeItem('almx.unitId');
           showToast('Sessão encerrada com segurança.', 'logout');
         }}
         onNotificationClick={() => {

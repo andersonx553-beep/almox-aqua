@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlmxLogo } from './AlmxLogo';
+import { api } from '../api';
 
 type DevelopmentUser = {
   id: string;
@@ -14,42 +15,31 @@ interface LoginScreenProps {
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
-  const apiBaseUrl = (import.meta as ImportMeta & { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL || 'http://localhost:3001';
   const [users, setUsers] = useState<DevelopmentUser[]>([]);
   const [selectedUserId, setSelectedUserId] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
-  const [unit, setUnit] = useState('AquaVille Resort - Unidade Principal');
   const [loading, setLoading] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
 
   useEffect(() => {
-    fetch(`${apiBaseUrl}/api/auth/users`)
-      .then((response) => response.json())
+    api.listUsers()
       .then((data: DevelopmentUser[]) => {
         setUsers(data);
         if (data.length) setSelectedUserId(data[0].id);
         else setIsRegistering(true);
       })
       .catch(() => setIsRegistering(true));
-  }, [apiBaseUrl]);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
-      const endpoint = isRegistering ? '/api/auth/users' : '/api/auth/select';
-      const response = await fetch(`${apiBaseUrl}${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isRegistering ? { name, email } : { userId: selectedUserId }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => null);
-        throw new Error(error?.error || 'Não foi possível identificar o usuário.');
-      }
-      const data = await response.json();
+      const data = isRegistering
+        ? await api.createUser({ name, email })
+        : await api.selectUser(selectedUserId);
       localStorage.setItem('almx.userId', data.user.id);
       localStorage.setItem('almx.userName', data.user.name);
       localStorage.setItem('almx.unitId', data.user.defaultUnitId || '');
@@ -168,41 +158,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </button>
             )}
 
-            {/* Facility / Unit Context */}
-            <div className="flex flex-col">
-              <label
-                className="text-xs font-semibold text-[#3e494a] mb-1 flex items-center gap-1"
-                htmlFor="warehouse-unit"
-              >
-                <span className="material-symbols-outlined text-[16px] text-[#00616a]">
-                  warehouse
-                </span>
-                <span>Empresa / Unidade Operacional</span>
-              </label>
-              <div className="relative flex items-center">
-                <span className="material-symbols-outlined absolute left-3.5 text-[#6e797b] pointer-events-none text-[20px]">
-                  apartment
-                </span>
-                <select
-                  id="warehouse-unit"
-                  value={unit}
-                  onChange={(e) => setUnit(e.target.value)}
-                  className="w-full bg-[#edf4ff] text-[#001d32] text-sm pl-11 pr-10 py-2.5 rounded-xl outline-none focus:bg-white focus:ring-2 focus:ring-[#00616a]/30 transition-all appearance-none cursor-pointer"
-                >
-                  <option value="AquaVille Resort - Unidade Principal">
-                    AquaVille Resort - Unidade Principal
-                  </option>
-                  <option value="Depósito Central - Hub Logístico">
-                    Depósito Central - Hub Logístico
-                  </option>
-                  <option value="Almoxarifado II - Suprimentos Frios">
-                    Almoxarifado II - Suprimentos Frios
-                  </option>
-                </select>
-                <span className="material-symbols-outlined absolute right-3.5 text-[#6e797b] pointer-events-none text-[20px]">
-                  expand_more
-                </span>
-              </div>
+            <div className="flex items-center gap-2 rounded-xl bg-[#edf4ff] px-3 py-2.5 text-xs text-[#3e494a]">
+              <span className="material-symbols-outlined text-[18px] text-[#00616a]">warehouse</span>
+              <span>A unidade disponível será definida pelos acessos reais do usuário.</span>
             </div>
 
             <p className="text-xs text-[#3e494a] pt-1">

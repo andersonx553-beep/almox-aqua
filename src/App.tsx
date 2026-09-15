@@ -1,11 +1,6 @@
-import React, { useState } from 'react';
-import { ScreenType, Product, Movement, InventoryItem, InvoiceData } from './types';
-import {
-  INITIAL_PRODUCTS,
-  INITIAL_MOVEMENTS,
-  INITIAL_INVENTORY_ITEMS,
-  INITIAL_INVOICE,
-} from './data/mockData';
+import React, { useEffect, useState } from 'react';
+import { ScreenType, Product, Movement, InventoryItem } from './types';
+import { api } from './api';
 import { Header } from './components/Header';
 import { Navigation } from './components/Navigation';
 import { DashboardScreen } from './components/DashboardScreen';
@@ -19,7 +14,9 @@ import { Toast } from './components/Toast';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [currentUnit, setCurrentUnit] = useState('AquaVille Resort - Unidade Principal');
+  const [currentUnit, setCurrentUnit] = useState('');
+  const [currentUserName, setCurrentUserName] = useState('');
+  const [units, setUnits] = useState<{ id: string; name: string }[]>([]);
   const [currentScreen, setCurrentScreen] = useState<ScreenType>('dashboard');
   const [estoqueFilter, setEstoqueFilter] = useState('all');
   const [movimentarInitialType, setMovimentarInitialType] = useState<
@@ -28,11 +25,9 @@ export default function App() {
   const [movimentarInitialSku, setMovimentarInitialSku] = useState('QUI-0021');
 
   // Operational State
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [movements, setMovements] = useState<Movement[]>(INITIAL_MOVEMENTS);
-  const [inventoryItems, setInventoryItems] =
-    useState<InventoryItem[]>(INITIAL_INVENTORY_ITEMS);
-  const [invoice, setInvoice] = useState<InvoiceData>(INITIAL_INVOICE);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [movements, setMovements] = useState<Movement[]>([]);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
 
   // Toast Notification System
   const [toast, setToast] = useState<{
@@ -52,6 +47,29 @@ export default function App() {
     }, 3500);
   };
 
+  const refreshData = async () => {
+    const [rawProducts, balances, rawMovements, rawInventories, rawUnits] = await Promise.all([
+      api.getProducts(), api.getBalances(), api.getMovements(), api.getInventories(), api.getUnits(), api.getCategories(), api.getSuppliers(),
+    ]);
+    const balanceByProduct = new Map<string, any>();
+    balances.forEach((balance) => { if (!balanceByProduct.has(balance.productId)) balanceByProduct.set(balance.productId, balance); });
+    setProducts(rawProducts.map((product) => {
+      const balance = balanceByProduct.get(product.id);
+      const stock = balance ? Number(balance.quantityOnHand) : 0;
+      const minStock = Number(product.minStock || 0);
+      const maxStock = Number(product.maxStock || Math.max(minStock, stock, 1));
+      return { ...product, category: String(product.category?.code || '').toLowerCase() as Product['category'], categoryLabel: product.category?.name || 'Sem categoria', status: stock <= minStock ? 'critical' : stock <= minStock * 1.3 ? 'warning' : 'normal', stock, minStock, maxStock, unit: product.unit, location: balance?.location?.name || 'Sem localização', lot: balance?.lot?.lotNumber || 'Sem lote', lotId: balance?.lotId, warehouseId: balance?.warehouseId, locationId: balance?.locationId, lotExpiration: balance?.lot?.expirationDate ? new Date(balance.lot.expirationDate).toLocaleDateString('pt-BR') : 'Não informado', costPrice: Number(balance?.lot?.unitCost || 0), supplier: 'Não informado', imageUrl: product.imageUrl || '', imageAlt: product.name, icon: 'inventory_2', weeklyConsumption: [], technicalSpecs: product.technicalSpecs || '' };
+    }));
+    setMovements(rawMovements.flatMap((movement) => movement.items?.map((item: any) => ({ id: movement.id, code: movement.referenceCode, type: movement.type === 'ENTRY' ? 'entrada' : movement.type === 'EXIT' ? 'saida' : 'ajuste', date: new Date(movement.occurredAt).toLocaleDateString('pt-BR'), timeAgo: new Date(movement.occurredAt).toLocaleTimeString('pt-BR'), itemSku: item.product?.sku || item.productId, itemName: item.product?.name || '', quantity: Number(item.quantityDelta), unit: item.unit, user: movement.performedBy?.name || '', department: movement.department || '', costCenter: movement.costCenter || '', newBalance: Number(item.balanceAfter || 0) })) || []));
+    const inventory = rawInventories[0];
+    setInventoryItems((inventory?.items || []).map((item: any) => { const expected = Number(item.expectedQuantity); const counted = item.countedQuantity == null ? expected : Number(item.countedQuantity); const difference = counted - expected; return { id: item.id, sku: item.product?.sku || item.productId, name: item.product?.name || '', location: item.locationSnapshot || item.locationId, systemStock: expected, physicalCount: counted, unit: item.product?.unit || '', discrepancyType: difference < 0 ? 'shortage' : difference > 0 ? 'surplus' : 'none', discrepancyQty: difference, financialImpact: 0, imageUrl: item.product?.imageUrl || '', imageAlt: item.product?.name || '', lotNumber: item.lot?.lotNumber }; }));
+    setUnits(rawUnits);
+    const unit = rawUnits.find((item) => item.id === localStorage.getItem('almx.unitId')) || rawUnits[0];
+    if (unit) { setCurrentUnit(unit.name); localStorage.setItem('almx.unitId', unit.id); }
+  };
+
+  useEffect(() => { if (isAuthenticated) refreshData().catch((error) => showToast(error.message, 'error', 'error')); }, [isAuthenticated]);
+
   const handleNavigate = (screen: ScreenType, initialAction?: string) => {
     if (screen === 'estoque' && initialAction) {
       setEstoqueFilter(initialAction);
@@ -69,77 +87,26 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleAddMovement = (newMov: Movement) => {
-    setMovements((prev) => [newMov, ...prev]);
-
-    // Update product stock if SKU matches
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.sku === newMov.itemSku) {
-          const updatedStock = Math.max(0, p.stock + newMov.quantity);
-          const newStatus =
-            updatedStock <= p.minStock
-              ? 'critical'
-              : updatedStock <= p.minStock * 1.3
-              ? 'warning'
-              : 'normal';
-          return {
-            ...p,
-            stock: updatedStock,
-            status: newStatus,
-          };
-        }
-        return p;
-      })
-    );
-
-    setCurrentScreen('dashboard');
+  const handleAddMovement = async (newMov: Movement) => {
+    if (newMov.type === 'transferir') {
+      showToast('Transferência exige seleção de origem e destino.', 'info', 'info');
+      return;
+    }
+    const product = products.find((item) => item.sku === newMov.itemSku);
+    if (!product?.lotId || !product.warehouseId || !product.locationId) {
+      showToast('Produto sem lote/localização disponível para movimentação.', 'error', 'error');
+      return;
+    }
+    try {
+      await api.createMovement({ type: newMov.type === 'entrada' ? 'ENTRY' : newMov.type === 'saida' ? 'EXIT' : 'ADJUSTMENT', referenceCode: newMov.code, reason: newMov.costCenter || 'Movimentação manual', warehouseId: product.warehouseId, locationId: product.locationId, items: [{ productId: product.id, lotId: product.lotId, quantity: Math.abs(newMov.quantity), quantityDelta: newMov.quantity }] });
+      await refreshData();
+      setCurrentScreen('dashboard');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Falha ao registrar movimentação.', 'error', 'error'); }
   };
 
   const handleApproveEntries = (totalItems: number) => {
-    // Reconcile and add +20 to Cloro and +15 to Desengordurante
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.sku === 'QUI-0021') {
-          return {
-            ...p,
-            stock: p.stock + 20,
-            status: 'normal',
-          };
-        }
-        if (p.sku === 'QUI-0089') {
-          return {
-            ...p,
-            stock: p.stock + 15,
-            status: 'normal',
-          };
-        }
-        return p;
-      })
-    );
-
-    // Add entry movement record
-    const entryMov: Movement = {
-      id: `mov-nfe-${Date.now()}`,
-      code: '#ENT-9043',
-      type: 'entrada',
-      date: 'Hoje',
-      timeAgo: 'Agora',
-      itemSku: 'QUI-0021',
-      itemName: 'Cloro Shock 10kg (+ Lote NF 148.921)',
-      quantity: 45,
-      unit: 'un',
-      user: 'Reconciliação OCR Automática',
-      department: 'Almoxarifado Geral',
-      costCenter: 'C.C. 100 - Suprimentos',
-      newBalance: 28,
-    };
-    setMovements((prev) => [entryMov, ...prev]);
-
-    showToast(
-      `NF-e escriturada com sucesso! +${totalItems} volumes incorporados ao estoque físico.`,
-      'inventory_2'
-    );
+    refreshData().catch((error) => showToast(error.message, 'error', 'error'));
+    showToast(`NF-e escriturada com sucesso! ${totalItems} itens incorporados ao estoque físico.`, 'inventory_2');
     setCurrentScreen('dashboard');
   };
 
@@ -155,7 +122,8 @@ export default function App() {
     return (
       <LoginScreen
         onLoginSuccess={(user) => {
-          setCurrentUnit('AquaVille Resort - Unidade Principal');
+          setCurrentUnit(user.defaultUnitId || '');
+          setCurrentUserName(user.name);
           setIsAuthenticated(true);
           showToast(`Operador ${user.name} identificado no ALMX.`, 'verified');
         }}
@@ -178,8 +146,12 @@ export default function App() {
         currentScreen={currentScreen}
         selectedUnit={currentUnit}
         currentUnit={currentUnit}
+        userName={currentUserName}
+        units={units}
         onSelectUnit={(unit) => {
           setCurrentUnit(unit);
+          const selected = units.find((item) => item.name === unit);
+          if (selected) localStorage.setItem('almx.unitId', selected.id);
           showToast(`Unidade alterada para: ${unit}`, 'apartment');
         }}
         onSwitchUnit={(unit) => {
@@ -204,6 +176,7 @@ export default function App() {
         {currentScreen === 'dashboard' && (
           <DashboardScreen
             movements={movements}
+            products={products}
             onNavigate={handleNavigate}
             onSelectCategoryFilter={(cat) => {
               setEstoqueFilter(cat);
@@ -227,7 +200,6 @@ export default function App() {
 
         {currentScreen === 'ocr' && (
           <OcrScreen
-            invoice={invoice}
             onApproveEntries={handleApproveEntries}
             showToast={showToast}
           />
@@ -238,6 +210,7 @@ export default function App() {
             initialType={movimentarInitialType}
             initialSku={movimentarInitialSku}
             onAddMovement={handleAddMovement}
+            product={products.find((product) => product.sku === movimentarInitialSku)}
             onCancel={() => setCurrentScreen('dashboard')}
             showToast={showToast}
           />

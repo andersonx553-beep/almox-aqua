@@ -33,6 +33,9 @@ export interface Product {
   technicalSpecs?: string;
   monthlyTurnover?: string;
   coverageDays?: number;
+  lotId?: string;
+  warehouseId?: string;
+  locationId?: string;
 }
 
 export interface InventoryItem {

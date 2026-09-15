@@ -12,6 +12,8 @@ export interface HeaderProps {
   onNavigate?: (screen: ScreenType) => void;
   onLogout?: () => void;
   onNotificationClick?: () => void;
+  userName?: string;
+  units?: { id: string; name: string }[];
 }
 
 const screenTitles: Record<ScreenType, string> = {
@@ -33,13 +35,15 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   onLogout,
   onNotificationClick,
+  userName,
+  units: availableUnits = [],
 }) => {
   const [showUnitDropdown, setShowUnitDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [avatarError, setAvatarError] = useState(false);
 
-  const activeUnit = selectedUnit || currentUnit || 'AquaVille Resort - Unidade Principal';
+  const activeUnit = selectedUnit || currentUnit || 'Unidade não selecionada';
 
   const handleSelectUnit = (unit: string) => {
     if (onSelectUnit) onSelectUnit(unit);
@@ -59,11 +63,7 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
-  const units = [
-    { id: 'aquaville', name: 'AquaVille Resort - Unidade Principal' },
-    { id: 'central', name: 'Depósito Central - Hub Logístico' },
-    { id: 'almox-2', name: 'Almoxarifado II - Suprimentos Frios' },
-  ];
+  const units = availableUnits;
 
   const notifications = [
     {
@@ -242,7 +242,7 @@ export const Header: React.FC<HeaderProps> = ({
                     />
                     <div className="flex flex-col min-w-0">
                       <span className="font-bold text-xs text-[#001d32] truncate">
-                        Mariana Souza Rocha
+                        {userName || 'Usuário selecionado'}
                       </span>
                       <span className="text-[10px] text-[#2b6676] font-medium truncate">
                         Coordenadora de Almoxarifado

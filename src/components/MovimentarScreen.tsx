@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Movement } from '../types';
+import { Movement, Product } from '../types';
 import { ProductImage } from './ProductImage';
 
 interface MovimentarScreenProps {
   initialType?: 'entrada' | 'saida' | 'transferir' | 'ajuste';
   initialSku?: string;
-  onAddMovement: (mov: Movement) => void;
+  onAddMovement: (mov: Movement) => void | Promise<void>;
+  product?: Product;
   onCancel: () => void;
   showToast: (msg: string, icon?: string) => void;
 }
@@ -14,6 +15,7 @@ export const MovimentarScreen: React.FC<MovimentarScreenProps> = ({
   initialType = 'saida',
   initialSku = 'QUI-0021',
   onAddMovement,
+    product,
   onCancel,
   showToast,
 }) => {
@@ -29,7 +31,7 @@ export const MovimentarScreen: React.FC<MovimentarScreenProps> = ({
   );
   const [signed, setSigned] = useState(true);
 
-  const currentStock = 8;
+  const currentStock = product?.stock || 0;
   const newStock =
     operationType === 'entrada'
       ? currentStock + quantity
@@ -49,7 +51,7 @@ export const MovimentarScreen: React.FC<MovimentarScreenProps> = ({
       date: 'Hoje',
       timeAgo: 'Agora',
       itemSku: initialSku,
-      itemName: 'Cloro Líquido Concentrado 50L',
+      itemName: product?.name || initialSku,
       quantity: operationType === 'saida' ? -quantity : quantity,
       unit: 'un',
       user: person.split('-')[0].trim(),
@@ -238,15 +240,15 @@ export const MovimentarScreen: React.FC<MovimentarScreenProps> = ({
                 />
               </div>
               <div className="min-w-0 flex flex-col">
-                <span className="font-mono text-[11px] text-[#00616a] font-bold">QUI-0021</span>
+                <span className="font-mono text-[11px] text-[#00616a] font-bold">{product?.sku || initialSku}</span>
                 <h3 className="text-xs font-bold text-[#001d32] truncate">
-                  Cloro Líquido Concentrado 50L
+                  {product?.name || 'Produto não selecionado'}
                 </h3>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className="text-[10px] text-[#2b6676] font-semibold bg-[#b0e8fc]/40 px-1.5 py-0.2 rounded">
-                    Lote: #L-9921
+                    Lote: {product?.lot || 'Não informado'}
                   </span>
-                  <span className="text-[10px] text-[#6e797b]">Val: 15/12/2024</span>
+                  <span className="text-[10px] text-[#6e797b]">Val: {product?.lotExpiration || 'Não informado'}</span>
                 </div>
               </div>
             </div>

@@ -13,7 +13,8 @@
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "node server/seed.js",
-    "api": "node server.js"
+    "api": "node server.js",
+    "test": "node --test tests/backend.test.js"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

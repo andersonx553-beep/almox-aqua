@@ -1,14 +1,16 @@
 import React from 'react';
-import { Movement, ScreenType } from '../types';
+import { Movement, Product, ScreenType } from '../types';
 
 interface DashboardScreenProps {
   movements: Movement[];
+  products: Product[];
   onNavigate: (screen: ScreenType, initialAction?: string) => void;
   onSelectCategoryFilter?: (cat: string) => void;
 }
 
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({
   movements,
+  products,
   onNavigate,
   onSelectCategoryFilter,
 }) => {
@@ -77,7 +79,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               </span>
               <div className="flex items-baseline gap-2 mt-0.5">
                 <span className="font-display text-3xl font-extrabold text-[#001d32] tracking-tight">
-                  1.248
+                  {products.length}
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-[#b0e8fc] text-[#084e5e] text-xs font-bold inline-flex items-center gap-0.5">
                   <span className="material-symbols-outlined text-[13px]">trending_up</span>
@@ -105,7 +107,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             </div>
             <div className="mt-3 flex flex-col">
               <span className="font-display text-2xl font-extrabold text-[#ba1a1a] tracking-tight">
-                14
+                {products.filter((product) => product.status === 'critical').length}
               </span>
               <div className="mt-1">
                 <span className="inline-block px-1.5 py-0.5 rounded bg-[#ba1a1a] text-white text-[10px] font-bold uppercase tracking-wider">
@@ -128,7 +130,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
             </div>
             <div className="mt-3 flex flex-col">
               <span className="font-display text-2xl font-extrabold text-[#005d8c] tracking-tight">
-                3
+                {movements.filter((movement) => movement.type === 'entrada').length}
               </span>
               <div className="mt-1">
                 <span className="inline-block px-1.5 py-0.5 rounded bg-[#005d8c] text-white text-[10px] font-medium tracking-wide">
@@ -147,7 +149,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               </div>
             </div>
             <div className="mt-3 flex items-baseline gap-1">
-              <span className="font-display text-2xl font-bold text-[#00616a]">182</span>
+              <span className="font-display text-2xl font-bold text-[#00616a]">{movements.filter((movement) => movement.type === 'entrada').length}</span>
               <span className="text-xs text-[#6e797b]">remessas</span>
             </div>
           </div>
@@ -161,7 +163,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
               </div>
             </div>
             <div className="mt-3 flex items-baseline gap-1">
-              <span className="font-display text-2xl font-bold text-[#2b6676]">341</span>
+              <span className="font-display text-2xl font-bold text-[#2b6676]">{movements.filter((movement) => movement.type === 'saida').length}</span>
               <span className="text-xs text-[#6e797b]">requisições</span>
             </div>
           </div>
